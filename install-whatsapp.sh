@@ -26,6 +26,7 @@ ICON_DIR="${HOME}/.local/share/icons/hicolor/512x512/apps"
 APP_NAME="WhatsApp"
 APP_URL="https://web.whatsapp.com/"
 TEMP_DIR=""
+BUILT_FOLDER=""  # used by build_whatsapp() to return the result path
 
 # Icon: use bundled icon.png if present, otherwise will be downloaded later
 if [[ -f "${SCRIPT_DIR}/icon.png" ]]; then
@@ -274,8 +275,10 @@ build_whatsapp() {
         exit 1
     fi
 
-    echo "${built_folder}"
+    # Set the global instead of echoing — avoids stdout-capture swallowing all log output
+    BUILT_FOLDER="${built_folder}"
 }
+
 
 # ---------------------------------------------------------------------------
 # Install app files to the target directory
@@ -326,7 +329,7 @@ setup_desktop_shortcut() {
 Name=WhatsApp
 GenericName=WhatsApp Desktop
 Comment=WhatsApp Web Desktop Client
-Exec=${target_dir}/WhatsApp %U
+Exec=${target_dir}/WhatsApp --no-sandbox --ozone-platform-hint=auto %U
 Icon=${target_dir}/icon.png
 Terminal=false
 Type=Application
@@ -446,8 +449,8 @@ main() {
     process_icon "${icon_arg}" "${converted_icon}"
 
     # 4. Build WhatsApp app with Nativefier
-    local built_folder
-    built_folder=$(build_whatsapp "${converted_icon}" "${TEMP_DIR}")
+    build_whatsapp "${converted_icon}" "${TEMP_DIR}"
+    local built_folder="${BUILT_FOLDER}"
 
     # 5. Install to target directory
     install_whatsapp "${built_folder}" "${target_dir}" "${converted_icon}"
