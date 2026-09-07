@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WhatsApp Desktop App Automated Installer for Linux
-# Built with Nativefier
-# Reference: /home/kanishk/Desktop/Blog-site/content/WhatsApp Desktop/WhatsApp Desktop App.md
+# Built with Nativefier — works on Fedora, Ubuntu, Arch, openSUSE, and more
 # ==============================================================================
 
 set -euo pipefail
@@ -16,14 +15,10 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Default Configuration
+# ---------------------------------------------------------------------------
+# Configuration — all paths are portable, no hardcoded user home directories
+# ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/icon.png" ]]; then
-    DEFAULT_ICON_SOURCE="${SCRIPT_DIR}/icon.png"
-else
-    DEFAULT_ICON_SOURCE="/home/kanishk/Pictures/system/WhatsApp.png"
-fi
-FALLBACK_ICON_SOURCE="/home/kanishk/Desktop/Blog-site/images/whatsapp-icon.png"
 INSTALL_DIR="/opt/WhatsApp"
 DESKTOP_DIR="${HOME}/.local/share/applications"
 DESKTOP_FILE="${DESKTOP_DIR}/whatsapp.desktop"
@@ -32,21 +27,20 @@ APP_NAME="WhatsApp"
 APP_URL="https://web.whatsapp.com/"
 TEMP_DIR=""
 
-log_info() {
-    echo -e "${BLUE}${BOLD}[INFO]${NC} $1"
-}
+# Icon: use bundled icon.png if present, otherwise will be downloaded later
+if [[ -f "${SCRIPT_DIR}/icon.png" ]]; then
+    DEFAULT_ICON_SOURCE="${SCRIPT_DIR}/icon.png"
+else
+    DEFAULT_ICON_SOURCE=""
+fi
 
-log_success() {
-    echo -e "${GREEN}${BOLD}[SUCCESS]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}${BOLD}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}${BOLD}[ERROR]${NC} $1" >&2
-}
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+log_info()    { echo -e "${BLUE}${BOLD}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}${BOLD}[SUCCESS]${NC} $1"; }
+log_warn()    { echo -e "${YELLOW}${BOLD}[WARNING]${NC} $1"; }
+log_error()   { echo -e "${RED}${BOLD}[ERROR]${NC} $1" >&2; }
 
 print_header() {
     echo -e "${CYAN}${BOLD}"
@@ -56,6 +50,9 @@ print_header() {
     echo -e "${NC}"
 }
 
+# ---------------------------------------------------------------------------
+# Cleanup on exit
+# ---------------------------------------------------------------------------
 cleanup() {
     if [[ -n "${TEMP_DIR:-}" && -d "${TEMP_DIR}" ]]; then
         log_info "Cleaning up temporary build files in ${TEMP_DIR}..."
@@ -64,15 +61,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
 show_help() {
-    cat << EOF
+    cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
 Automates building and installing WhatsApp Web as a native desktop application on Linux.
+Works on Fedora, Ubuntu, Arch, openSUSE, and any distro with dnf, apt, pacman, or zypper.
 
 Options:
-  -i, --icon <path>     Path to the source WhatsApp icon image (PNG or WebP)
-                        (default: ${DEFAULT_ICON_SOURCE})
+  -i, --icon <path>     Path to a WhatsApp icon image (PNG or WebP)
+                        (default: bundled icon.png, or auto-downloaded if not found)
   -d, --dir <path>      Installation target directory
                         (default: ${INSTALL_DIR})
   -u, --uninstall       Uninstall WhatsApp desktop app and desktop shortcut
@@ -81,10 +82,14 @@ Options:
 Examples:
   ./$(basename "$0")
   ./$(basename "$0") --icon /path/to/custom/whatsapp.png
+  ./$(basename "$0") --dir ~/.local/share/WhatsApp
   ./$(basename "$0") --uninstall
 EOF
 }
 
+# ---------------------------------------------------------------------------
+# Package manager detection
+# ---------------------------------------------------------------------------
 detect_package_manager() {
     if command -v dnf >/dev/null 2>&1; then
         echo "dnf"
@@ -99,6 +104,9 @@ detect_package_manager() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Install Node.js + npm via the system package manager
+# ---------------------------------------------------------------------------
 install_system_packages() {
     local pm
     pm=$(detect_package_manager)
@@ -129,20 +137,23 @@ install_system_packages() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# Check and install dependencies
+# ---------------------------------------------------------------------------
 check_dependencies() {
     log_info "Checking prerequisites..."
 
-    # Check Node.js and npm
+    # Node.js and npm
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
         log_warn "Node.js or npm is not installed. Attempting installation..."
         install_system_packages
     fi
     log_success "Node.js ($(node --version)) and npm ($(npm --version)) are ready."
 
-    # Check Nativefier
+    # Nativefier
     if ! command -v nativefier >/dev/null 2>&1; then
         log_info "Nativefier not found. Installing globally via npm..."
-        if [ "$EUID" -ne 0 ]; then
+        if [[ "$EUID" -ne 0 ]]; then
             sudo npm install -g nativefier
         else
             npm install -g nativefier
@@ -151,32 +162,61 @@ check_dependencies() {
     log_success "Nativefier ($(nativefier --version 2>/dev/null || echo 'installed')) is ready."
 }
 
+# ---------------------------------------------------------------------------
+# Download a fallback icon from the web
+# ---------------------------------------------------------------------------
+download_icon() {
+    local dest="$1"
+    local url="https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/512px-WhatsApp.svg.png"
+
+    log_warn "No local icon found. Attempting to download WhatsApp icon from the web..."
+
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
+            return 0
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget -q "$url" -O "$dest" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Process and convert icon to 512x512 RGBA PNG
+# ---------------------------------------------------------------------------
 process_icon() {
     local raw_icon="$1"
     local output_icon="$2"
 
-    if [[ ! -f "$raw_icon" ]]; then
-        if [[ -f "$FALLBACK_ICON_SOURCE" ]]; then
-            log_warn "Specified icon not found at ${raw_icon}. Using fallback at ${FALLBACK_ICON_SOURCE}."
-            raw_icon="$FALLBACK_ICON_SOURCE"
+    # If no icon path given or file missing, try to download one
+    if [[ -z "$raw_icon" || ! -f "$raw_icon" ]]; then
+        local downloaded_icon="${TEMP_DIR}/whatsapp-downloaded.png"
+        if download_icon "$downloaded_icon"; then
+            raw_icon="$downloaded_icon"
+            log_success "Downloaded fallback icon successfully."
         else
-            log_error "Icon file not found: ${raw_icon}"
+            log_error "Could not find or download a WhatsApp icon."
+            log_error "Please provide one manually with: --icon /path/to/icon.png"
             exit 1
         fi
     fi
 
     log_info "Processing icon: ${raw_icon}"
 
-    # Check if conversion is needed (e.g. WebP or not a 512x512 PNG)
+    # Detect if already a PNG (used as last-resort fallback)
     local is_png=0
     if file "$raw_icon" | grep -q "PNG image data"; then
         is_png=1
     fi
 
-    # Convert to standard 512x512 RGBA PNG for maximum desktop compatibility
+    # Convert to standard 512x512 RGBA PNG (try multiple tools in order)
     if command -v python3 >/dev/null 2>&1 && python3 -c "import PIL" >/dev/null 2>&1; then
-        python3 - <<EOF
+        python3 - <<PYEOF
 from PIL import Image
+import sys
 try:
     img = Image.open("${raw_icon}")
     if img.mode != 'RGBA':
@@ -185,9 +225,9 @@ try:
     img_512.save("${output_icon}", 'PNG')
     print("Icon converted and saved successfully with PIL.")
 except Exception as e:
-    print(f"PIL conversion failed: {e}")
-    exit(1)
-EOF
+    print(f"PIL conversion failed: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
     elif command -v magick >/dev/null 2>&1; then
         magick "${raw_icon}" -resize 512x512 "${output_icon}"
     elif command -v convert >/dev/null 2>&1; then
@@ -197,13 +237,16 @@ EOF
     elif [[ $is_png -eq 1 ]]; then
         cp "${raw_icon}" "${output_icon}"
     else
-        log_error "Cannot convert ${raw_icon} to PNG. Please install python3-pillow or ImageMagick."
+        log_error "Cannot convert icon to PNG. Please install python3-pillow or ImageMagick."
         exit 1
     fi
 
     log_success "Prepared application icon: ${output_icon}"
 }
 
+# ---------------------------------------------------------------------------
+# Build the WhatsApp app with Nativefier
+# ---------------------------------------------------------------------------
 build_whatsapp() {
     local icon_path="$1"
     local build_out_dir="$2"
@@ -234,6 +277,9 @@ build_whatsapp() {
     echo "${built_folder}"
 }
 
+# ---------------------------------------------------------------------------
+# Install app files to the target directory
+# ---------------------------------------------------------------------------
 install_whatsapp() {
     local source_folder="$1"
     local target_dir="$2"
@@ -241,14 +287,14 @@ install_whatsapp() {
 
     log_info "Installing WhatsApp to ${target_dir}..."
 
-    # Requires sudo if target is /opt or outside home
+    # Use sudo only if we don't have write access
     local use_sudo=""
     if [[ ! -w "$(dirname "${target_dir}")" ]] || [[ -d "${target_dir}" && ! -w "${target_dir}" ]]; then
         use_sudo="sudo"
     fi
 
     if [[ -d "${target_dir}" ]]; then
-        log_warn "Existing directory found at ${target_dir}. Replacing it..."
+        log_warn "Existing installation found at ${target_dir}. Replacing it..."
         ${use_sudo} rm -rf "${target_dir}"
     fi
 
@@ -258,9 +304,12 @@ install_whatsapp() {
     ${use_sudo} chmod -R u+rwX,go+rX "${target_dir}"
     ${use_sudo} chmod +x "${target_dir}/WhatsApp"
 
-    log_success "WhatsApp successfully installed to ${target_dir}."
+    log_success "WhatsApp installed to ${target_dir}."
 }
 
+# ---------------------------------------------------------------------------
+# Create .desktop file and register with the desktop environment
+# ---------------------------------------------------------------------------
 setup_desktop_shortcut() {
     local target_dir="$1"
     local icon_path="$2"
@@ -272,7 +321,7 @@ setup_desktop_shortcut() {
 
     cp "${icon_path}" "${ICON_DIR}/whatsapp.png" 2>/dev/null || true
 
-    cat << EOF > "${DESKTOP_FILE}"
+    cat > "${DESKTOP_FILE}" <<EOF
 [Desktop Entry]
 Name=WhatsApp
 GenericName=WhatsApp Desktop
@@ -290,19 +339,19 @@ EOF
     chmod +x "${DESKTOP_FILE}"
     log_success "Created desktop entry: ${DESKTOP_FILE}"
 
-    # Update system desktop database (GNOME, XFCE, and universal)
+    # GNOME / XFCE / generic
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "${DESKTOP_DIR}" 2>/dev/null || true
     fi
 
-    # Update KDE Plasma system configuration cache (KDE 6 / KDE 5)
+    # KDE Plasma
     if command -v kbuildsycoca6 >/dev/null 2>&1; then
         kbuildsycoca6 2>/dev/null || true
     elif command -v kbuildsycoca5 >/dev/null 2>&1; then
         kbuildsycoca5 2>/dev/null || true
     fi
 
-    # Update icon cache if tool exists
+    # GTK icon cache
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor" 2>/dev/null || true
     fi
@@ -310,17 +359,22 @@ EOF
     log_success "Desktop database and icon cache refreshed."
 }
 
+# ---------------------------------------------------------------------------
+# Uninstall
+# ---------------------------------------------------------------------------
 uninstall() {
     log_info "Uninstalling WhatsApp Desktop App..."
 
     local use_sudo=""
-    if [[ -d "${INSTALL_DIR}" ]] && [[ ! -w "${INSTALL_DIR}" ]]; then
+    if [[ -d "${INSTALL_DIR}" && ! -w "${INSTALL_DIR}" ]]; then
         use_sudo="sudo"
     fi
 
     if [[ -d "${INSTALL_DIR}" ]]; then
         log_info "Removing ${INSTALL_DIR}..."
         ${use_sudo} rm -rf "${INSTALL_DIR}"
+    else
+        log_warn "${INSTALL_DIR} not found — nothing to remove."
     fi
 
     if [[ -f "${DESKTOP_FILE}" ]]; then
@@ -340,6 +394,9 @@ uninstall() {
     log_success "WhatsApp has been completely removed from your system."
 }
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 main() {
     local icon_arg="${DEFAULT_ICON_SOURCE}"
     local target_dir="${INSTALL_DIR}"
@@ -378,30 +435,30 @@ main() {
         exit 0
     fi
 
-    # 1. Verify and install dependencies (Node, npm, Nativefier)
+    # 1. Verify and install dependencies (Node.js, npm, Nativefier)
     check_dependencies
 
-    # 2. Setup temporary workspace
+    # 2. Set up temporary workspace
     TEMP_DIR=$(mktemp -d /tmp/whatsapp-build.XXXXXX)
     local converted_icon="${TEMP_DIR}/icon.png"
 
-    # 3. Process icon (convert WebP/PNG to proper 512x512 PNG)
+    # 3. Process icon → 512x512 RGBA PNG
     process_icon "${icon_arg}" "${converted_icon}"
 
-    # 4. Build WhatsApp app using Nativefier
+    # 4. Build WhatsApp app with Nativefier
     local built_folder
     built_folder=$(build_whatsapp "${converted_icon}" "${TEMP_DIR}")
 
-    # 5. Install app to target directory (/opt/WhatsApp)
+    # 5. Install to target directory
     install_whatsapp "${built_folder}" "${target_dir}" "${converted_icon}"
 
-    # 6. Create .desktop file and register with desktop environment
+    # 6. Create .desktop file and register with the desktop environment
     setup_desktop_shortcut "${target_dir}" "${converted_icon}"
 
     echo ""
     log_success "🎉 WhatsApp Desktop App installation complete!"
     echo -e "${GREEN}You can now launch WhatsApp from your Application Menu (search 'WhatsApp')${NC}"
-    echo -e "${CYAN}Or start it from terminal: ${BOLD}${target_dir}/WhatsApp &${NC}"
+    echo -e "${CYAN}Or start it from the terminal: ${BOLD}${target_dir}/WhatsApp &${NC}"
     echo ""
 }
 
